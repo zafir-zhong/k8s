@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: zoneminder
+  namespace: zoneminder
+  labels:
+    app: zoneminder
+spec:
+  type: NodePort
+  sessionAffinity: ClientIP
+  ports:
+    - name: zoneminder-web
+      port: 80
+      targetPort: 80
+      nodePort: 31080
+  selector:
+    app: zoneminder
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zoneminder
+  namespace: zoneminder
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: zoneminder
+  template:
+    metadata:
+      labels:
+        app: zoneminder
+        podName: zoneminder
+    spec:
+      restartPolicy: Always
+      affinity:        # 配置节点反亲和
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: podName
+                    operator: In
+                    values:
+                      - zoneminder
+              topologyKey: kubernetes.io/hostname
+      terminationGracePeriodSeconds: 10 #当删除Pod时，等待时间
+      containers:
+        - name: zoneminder
+          #docker run -d -t -p 1080:443 \
+          #    -e TZ='America/Los_Angeles' \
+          #    -e ZM_DB_USER='zm-user' \
+          #    -e ZM_DB_PASS='zmpwd' \
+          #    -e ZM_DB_NAME='zoneminder_database' \
+          #    -e ZM_DB_HOST='my_central_db_server' \
+          #    -v /disk/zoneminder/events:/var/lib/zoneminder/events \
+          #    -v /disk/zoneminder/logs:/var/log/zm \
+          #    --shm-size="512m" \
+          #    --name zoneminder \
+          #    zoneminderhq/zoneminder:latest-el7
+          # 这个镜像不支持外部mysql
+          #image: bkjaya1952/zoneminder-master-docker-latest
+          #image: zoneminderhq/zoneminder:latest-el7
+          image: zoneminder/zoneminder:2022.06.29
+          env:
+            - name : TZ
+              value: Asia/Shanghai
+            - name: ZM_DB_USER
+              value: zm-user
+            - name: ZM_DB_PASS
+              value: zmpwd
+            - name: ZM_DB_NAME
+              value: zoneminder_database
+            - name: ZM_DB_HOST
+              value: 192.168.3.99:3306
+            - name: ZM_DIR_EVENTS
+              value: /var/lib/zoneminder/events
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - name: client-data  #必须有名称
+              mountPath: /var/lib/zoneminder/events #机子内目录
+            - name: config-data  #必须有名称
+              mountPath: /etc/zm #机子内目录
+            - name: log-data  #必须有名称
+              mountPath: /var/log/zm #机子内目录
+            # 挂载一个空目录用于共享
+          #            - name: logs
+          #              # 容器内目录地址
+          #              mountPath: /app/logs
+          resources:
+            limits:
+              memory: 1024Mi
+          readinessProbe:              #就绪探针
+            tcpSocket:
+              port: 80
+            initialDelaySeconds: 20    #延迟加载时间
+            periodSeconds: 5           #重试时间间隔
+            timeoutSeconds: 10         #超时时间设置
+            failureThreshold: 5        #探测失败的重试次数
+          livenessProbe:               #存活探针
+            tcpSocket:
+              port: 80
+            initialDelaySeconds: 60    #延迟加载时间
+            periodSeconds: 5           #重试时间间隔
+            timeoutSeconds: 5          #超时时间设置
+            failureThreshold: 3        #探测失败的重试次数
+      #        - name: filebeat
+      #          # 边车有版本要求，所以不加到这里来
+      #          #          lifecycle:
+      #          #            type: Sidecar
+      #          image: elastic/filebeat:7.9.3
+      #          imagePullPolicy: IfNotPresent
+      #          args:
+      #            - -environment
+      #            - container
+      #            - -c
+      #            - /app/config/filebeat.yml
+      #          volumeMounts:
+      #            # 独立的配置文件，这个配置文件通过kubectl create configmap --from-file=path
+      #            # kubectl create -n zoneminder configmap swagger2word-filebeat-config --from-file=`pwd`
+      #            # kubectl delete -n zoneminder configmap swagger2word-filebeat-config
+      #            - name: configs
+      #              # 机子内目录
+      #              mountPath: /app/config
+      #            - name: logs
+      #              #机子内目录
+      #              mountPath: /app/logs
+      #          resources:
+      #            limits:
+      #              memory: 200Mi
+      #          readinessProbe:
+      #            #使用命令检查
+      #            exec:
+      #              #指令，通过获取是否有锁来判断是否成功
+      #              command:
+      #                #指令
+      #                - cat
+      #                - /usr/share/filebeat/data/filebeat.lock
+      #            initialDelaySeconds: 20
+      #            periodSeconds: 5
+      #            timeoutSeconds: 10
+      #            failureThreshold: 5
+      #          livenessProbe:
+      #            exec:
+      #              command:
+      #                - cat
+      #                - /usr/share/filebeat/data/filebeat.lock
+      #            initialDelaySeconds: 20
+      #            periodSeconds: 5
+      #            timeoutSeconds: 5
+      #            failureThreshold: 3
+      volumes:
+        - name: client-data #挂载本机文件
+          nfs:
+            server: 192.168.3.99
+            path: /data/nfs/data/zoneminder/data/event
+        - name: log-data #挂载本机文件
+          nfs:
+            server: 192.168.3.99
+            path: /data/nfs/data/zoneminder/data/log
+        - name: config-data #挂载本机文件
+          nfs:
+            server: 192.168.3.99
+            path: /data/nfs/data/zoneminder/data/zm
+#        - name: logs
+#          emptyDir: {}
